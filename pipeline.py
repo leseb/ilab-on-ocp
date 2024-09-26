@@ -2,6 +2,7 @@
 # pylint: disable=no-value-for-parameter,import-outside-toplevel,import-error,no-member
 from typing import List, Literal, Optional
 import click
+import typing
 from kfp import dsl, compiler
 from kfp.kubernetes import (
     use_config_map_as_env,
@@ -16,19 +17,23 @@ K8S_NAME = "kfp-model-server"
 JUDGE_CONFIG_MAP = "kfp-model-server"
 JUDGE_SECRET = "judge-server"
 MOCKED_STAGES = ["sdg", "train", "eval"]
+PIPELINE_FILE_NAME = "pipeline.yaml"
+STANDALONE_TEMPLATE_FILE_NAME = "standalone.tpl"
+GENERATED_STANDALONE_FILE_NAME = "standalone.py"
+DEFAULT_REPO_URL = "https://github.com/instructlab/taxonomy.git"
 
 
 def pipeline_wrapper(mock: List[Literal[MOCKED_STAGES]]):
     """Wrapper for KFP pipeline, which allows for mocking individual stages."""
 
     # Imports for SDG stage
-    if "sdg" in mock:
+    if mock is not None and "sdg" in mock:
         from sdg.faked import git_clone_op, sdg_op
     else:
         from sdg import git_clone_op, sdg_op
 
     # Imports for Training stage
-    if "train" in mock:
+    if mock is not None and "train" in mock:
         from training.faked import pytorchjob_manifest_op
         from utils.faked import (
             kubectl_apply_op,
@@ -280,7 +285,6 @@ def pipeline_wrapper(mock: List[Literal[MOCKED_STAGES]]):
     return pipeline
 
 
-@click.command()
 @click.option(
     "--mock",
     type=click.Choice(MOCKED_STAGES, case_sensitive=False),
@@ -288,13 +292,211 @@ def pipeline_wrapper(mock: List[Literal[MOCKED_STAGES]]):
     multiple=True,
     default=[],
 )
-def cli(mock):
+@click.group(invoke_without_command=True)
+@click.pass_context
+def cli(ctx: click.Context, mock):
+    if ctx.invoked_subcommand is None:
+        generate_pipeline(mock)
 
+
+def generate_pipeline(mock):
     p = pipeline_wrapper(mock)
 
     with click.progressbar(length=1, label="Generating pipeline") as bar:
-        compiler.Compiler().compile(p, "pipeline.yaml")
+        compiler.Compiler().compile(p, PIPELINE_FILE_NAME)
         bar.update(1)
+
+
+@cli.command(name="gen-standalone")
+def gen_standalone():
+    """
+    Generates a standalone script that mimics the behavior of the pipeline.
+
+    This function should be used when Kubeflow Pipelines are not available. It will generate a
+    script that replicates the pipeline's functionality.
+
+    Example usage: ``` $ python pipeline.py gen-standalone ```
+    """
+    from jinja2 import Template
+    from jinja2.exceptions import TemplateSyntaxError
+    import yaml
+    import json
+
+    click.echo("Generating pipeline YAML file...")
+    try:
+        generate_pipeline(mock=None)
+    except ValueError as e:
+        click.echo(f"Error: {e}", err=True)
+        raise click.exceptions.Exit(1)
+
+    # Load the YAML pipeline file which contains multiple documents
+    with open(PIPELINE_FILE_NAME, "r", encoding="utf-8") as file:
+        try:
+            documents = list(yaml.safe_load_all(file))
+        except ValueError as e:
+            click.echo(f"Error: {e}", err=True)
+            raise click.exceptions.Exit(1)
+
+    # The list of executor names to extract details from to generate the standalone script
+    executor_names = [
+        "exec-data-processing-op",
+        "exec-sdg-op",
+        "exec-git-clone-op",
+    ]
+
+    details = {}
+    for executor_name in executor_names:
+        try:
+            executor_name_camelize = executor_name.replace("-", "_")
+            # replace "-" with "_" in executor_name to match the key in the details dictionary
+            executor_details = get_executor_details(documents, executor_name)
+            if executor_details is not None:
+                details[executor_name_camelize + "_image"] = executor_details["image"]
+                details[executor_name_camelize + "_command"] = executor_details[
+                    "command"
+                ]
+                details[executor_name_camelize + "_args"] = remove_template_markers(
+                    executor_details["args"], executor_name_camelize
+                )
+        except ValueError as e:
+            click.echo(f"Error: {e}", err=True)
+            raise click.exceptions.Exit(1)
+
+    # Open the template file
+    try:
+        with open(
+            STANDALONE_TEMPLATE_FILE_NAME, "r", encoding="utf-8"
+        ) as template_file:
+            template_content = template_file.read()
+    except FileNotFoundError as e:
+        click.echo(
+            f"Error: The template file '{STANDALONE_TEMPLATE_FILE_NAME}' was not found.",
+            err=True,
+        )
+        raise click.exceptions.Exit(1) from e
+    except IOError as e:
+        click.echo(
+            f"Error: An I/O error occurred while reading '{STANDALONE_TEMPLATE_FILE_NAME}': {e}",
+            err=True,
+        )
+        raise click.exceptions.Exit(1)
+
+    # Prepare the Jinja2 Template
+    try:
+        template = Template(template_content)
+    except TemplateSyntaxError as e:
+        click.echo(
+            f"Error: The template file '{STANDALONE_TEMPLATE_FILE_NAME}' contains a syntax error: {e}",
+            err=True,
+        )
+        raise click.exceptions.Exit(1)
+
+    # Render the template with dynamic values
+    rendered_code = template.render(details)
+
+
+
+    # Render again after replacing {{$}} with {{input_param}}
+    if "{{" in rendered_code or "{%" in rendered_code:
+        # Check if the rendered content contains Jinja2 template syntax
+        # If should since KFP uses the {{$}} placeholder for the input parameters
+        # Replace {{$}} with {{input_param}} in the rendered code
+        executor_input_json = {
+            "inputs": {
+                "parameterValues": {"repo_name": "some-huggingface-repo"},
+            },
+        }
+        executor_input_str = json.dumps(executor_input_json)
+        details["input_param"] = executor_input_str
+        rendered_code = rendered_code.replace("{{$}}", "{{input_param}}")
+
+        click.echo("Detected Jinja2 syntax in the rendered content. Rendering again...")
+        template = Template(rendered_code)
+        rendered_code = template.render(details)
+
+    # TODO: try to avoid the double rendering, but make sure to manipulate strings only, list, dict
+    # won't work
+    # Write the rendered code to a new Python file
+    with open(GENERATED_STANDALONE_FILE_NAME, "w", encoding="utf-8") as output_file:
+        output_file.write(rendered_code)
+
+    click.echo(f"Successfully generated '{GENERATED_STANDALONE_FILE_NAME}' script.")
+
+
+def get_executor_details(
+    documents: typing.List[typing.Dict[str, typing.Any]], executor_name: str
+) -> dict | None:
+    """
+    Extracts the command, args, and image of a given executor container from the provided YAML
+    documents.
+
+    Args:
+        documents (List[Dict[str, Any]]): List of YAML documents loaded as dictionaries.
+        executor_name (str): The name of the executor to search for.
+
+    Returns:
+        dict: A dictionary containing the 'command', 'args', and 'image' of the executor container
+        if found, otherwise raise en error.
+    """
+    spec = "deploymentSpec"
+    deployment_spec_found = False
+    for doc in documents:
+        deployment_spec = doc.get(spec)
+        if not deployment_spec:
+            continue
+        else:
+            deployment_spec_found = True
+        for executors_value in deployment_spec.values():
+            for executor, executor_value in executors_value.items():
+                if executor == executor_name:
+                    container = executor_value.get("container", {})
+                    if not all(
+                        key in container for key in ("command", "args", "image")
+                    ):
+                        raise ValueError(
+                            f"Executor '{executor_name}' does not have the required "
+                            "'command', 'args', or 'image' fields."
+                        )
+                    return {
+                        "command": container["command"],
+                        "args": container["args"],
+                        "image": container["image"],
+                    }
+        print(f"Executor '{executor_name}' not found in the provided {spec} document.")
+        return None
+    if not deployment_spec_found:
+        raise ValueError(
+            "The provided documents do not contain a 'deploymentSpec' key."
+        )
+
+
+def remove_template_markers(rendered_code: list, executor_name: str) -> list:
+    """
+    Removes the Jinja2 template markers from each element of the rendered code list.
+
+    Args:
+        rendered_code (list): The list of rendered code elements containing Jinja2 template markers.
+
+    Returns:
+        list: The list of rendered code elements with Jinja2 template markers removed.
+
+    Examples with an executor name of 'exec':
+        Input: ["{{$.inputs.parameters['repo_name']}}", "{{$.inputs.parameters['model']}}"]
+        Output: ["{exec_repo_name}", "{exec_model}"]
+
+    """
+    import re
+
+    pattern = r"\{\{\$\.inputs\.parameters\['([^']+)'\]\}\}"
+    rendered_code = [
+        re.sub(pattern, r"{%s_\1}" % executor_name, element)
+        for element in rendered_code
+    ]
+
+    # TODO: find a better approach
+    # additionally remove {{$.outputs.artifacts[\'taxonomy\'].path}} with /tmp
+    pattern = r"\{\{\$\.outputs\.artifacts\['([^']+)'\]\.path\}\}"
+    return [re.sub(pattern, r"/tmp", element) for element in rendered_code]
 
 
 if __name__ == "__main__":
