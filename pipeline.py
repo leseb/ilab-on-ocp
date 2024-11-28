@@ -1,6 +1,7 @@
 # type: ignore
 # pylint: disable=no-value-for-parameter,import-outside-toplevel,import-error,no-member
 import typing
+import uuid
 from typing import List, Literal, Optional
 
 import click
@@ -54,6 +55,9 @@ SAVE_SAMPLES = 0
 MAX_BATCH_LEN = 20000
 SEED = 42
 
+# Storage
+SDG_PROCESSED_DATA_PVC_NAME = "sdg-processed-data"
+
 
 def ilab_pipeline_wrapper(mock: List[Literal[MOCKED_STAGES]]):
     """Wrapper for KFP pipeline, which allows for mocking individual stages."""
@@ -83,6 +87,9 @@ def ilab_pipeline_wrapper(mock: List[Literal[MOCKED_STAGES]]):
             skills_processed_data_to_artifact_op,
         )
         from utils.faked import (
+            create_pvc_from_snapshot_op,
+            create_volume_snapshot_op,
+            list_phase1_final_model_op,
             model_to_pvc_op,
             pvc_to_model_op,
             pvc_to_mt_bench_op,
@@ -95,6 +102,9 @@ def ilab_pipeline_wrapper(mock: List[Literal[MOCKED_STAGES]]):
             skills_processed_data_to_artifact_op,
         )
         from utils import (
+            create_pvc_from_snapshot_op,
+            create_volume_snapshot_op,
+            list_phase1_final_model_op,
             model_to_pvc_op,
             pvc_to_model_op,
             pvc_to_mt_bench_op,
@@ -141,8 +151,9 @@ def ilab_pipeline_wrapper(mock: List[Literal[MOCKED_STAGES]]):
         final_eval_few_shots: int = FEW_SHOTS,
         final_eval_batch_size: str = BATCH_SIZE,
         final_eval_merge_system_user_message: bool = MERGE_SYSTEM_USER_MESSAGE,
-        # Other options
-        k8s_storage_class_name: str = "nfs-csi",
+        # Storage
+        k8s_storage_class_name: str = "ocs-external-storagecluster-ceph-rbd",
+        volume_snapshot_class_name: str = "ocs-external-storagecluster-rbdplugin-snapclass",
     ):
         """InstructLab pipeline
 
@@ -179,27 +190,41 @@ def ilab_pipeline_wrapper(mock: List[Literal[MOCKED_STAGES]]):
             final_eval_merge_system_user_message: Final model evaluation parameter for MT Bench Branch. Boolean indicating whether to merge system and user messages (required for Mistral based judges)
 
             k8s_storage_class_name: A Kubernetes StorageClass name for persistent volumes. Selected StorageClass must support RWX PersistentVolumes.
+            volume_snapshot_class_name: A Kubernetes VolumeSnapshotClass name for creating snapshots of persistent volumes.
         """
 
         # SDG stage
+        # This PVC is mounted:
+        # - to the git_clone_op task to store the taxonomy repository
+        # - to the sdg_op task to store the generated data
+        # - to the taxonomy_to_artifact_op task to store the taxonomy artifacts
+        # - to the sdg_to_artifact_op task to store the sdg artifacts
+        # - to the data_processing_op task to store the processed data
+        #
+        # "sdg_input_pvc_task" PVC will be snapshotted, a new PVC will be created out of it and this
+        # new PVC will be mounted to the pytorchjob_manifest_op task as "input_pvc_name" parameter.
         sdg_input_pvc_task = CreatePVC(
             pvc_name_suffix="-sdg",
-            access_modes=["ReadWriteMany"],
-            size="10Gi",
+            access_modes=["ReadWriteOnce"],
+            size="100Gi",
             storage_class_name=k8s_storage_class_name,
         )
+
+        # Clone taxonomy repository containing the skills and knowledge data for the SDG
         git_clone_task = git_clone_op(
             repo_branch=sdg_repo_branch,
             repo_pr=sdg_repo_pr if sdg_repo_pr and sdg_repo_pr > 0 else None,
             repo_url=sdg_repo_url,
         )
+        git_clone_task.after(sdg_input_pvc_task)
+        git_clone_task.set_caching_options(False)
         mount_pvc(
             task=git_clone_task,
             pvc_name=sdg_input_pvc_task.output,
             mount_path="/data",
         )
-        git_clone_task.set_caching_options(False)
 
+        # Generate synthetic data
         sdg_task = sdg_op(
             num_instructions_to_generate=sdg_scale_factor,
             pipeline=sdg_pipeline,
@@ -207,30 +232,32 @@ def ilab_pipeline_wrapper(mock: List[Literal[MOCKED_STAGES]]):
             repo_pr=sdg_repo_pr,
             sdg_sampling_size=sdg_sample_size,
         )
+        sdg_task.after(git_clone_task)
         sdg_task.set_env_variable("HOME", "/tmp")
         sdg_task.set_env_variable("HF_HOME", "/tmp")
+        sdg_task.set_caching_options(False)
         use_config_map_as_env(
             sdg_task, TEACHER_CONFIG_MAP, dict(endpoint="endpoint", model="model")
         )
         use_secret_as_env(sdg_task, TEACHER_SECRET, {"api_key": "api_key"})
-        sdg_task.after(git_clone_task)
         mount_pvc(
             task=sdg_task,
             pvc_name=sdg_input_pvc_task.output,
             mount_path="/data",
         )
-        sdg_task.set_caching_options(False)
 
         # Upload "sdg" and "taxonomy" artifacts to S3 without blocking the rest of the workflow
+        # Do the upload one by one since the PVC is mounted to the task
         taxonomy_to_artifact_task = taxonomy_to_artifact_op()
-        taxonomy_to_artifact_task.after(git_clone_task, sdg_task)
+        taxonomy_to_artifact_task.after(sdg_task)
         mount_pvc(
             task=taxonomy_to_artifact_task,
             pvc_name=sdg_input_pvc_task.output,
             mount_path="/data",
         )
+
         sdg_to_artifact_task = sdg_to_artifact_op()
-        sdg_to_artifact_task.after(git_clone_task, sdg_task)
+        sdg_to_artifact_task.after(taxonomy_to_artifact_task)
         mount_pvc(
             task=sdg_to_artifact_task,
             pvc_name=sdg_input_pvc_task.output,
@@ -246,42 +273,32 @@ def ilab_pipeline_wrapper(mock: List[Literal[MOCKED_STAGES]]):
         model_source_s3_task = dsl.importer(
             artifact_uri=sdg_base_model, artifact_class=dsl.Model
         )
-
-        # We need to pass storage_class_name as "" to use the default StorageClass, if left empty, KFP uses "standard" StorageClass.
-        # 'standard' !=  default StorageClass
-        # https://github.com/kubeflow/pipelines/blob/1cded35cf5e93d8c8d32fefbddceb2eed8de9a0a/backend/src/v2/driver/driver.go#L1428-L1436
-        # At least we made it a pipeline parameter
-        model_pvc_task = CreatePVC(
-            pvc_name_suffix="-model-cache",
-            access_modes=["ReadWriteMany"],
-            size="100Gi",
-            storage_class_name=k8s_storage_class_name,
-        )
+        model_source_s3_task.after(sdg_to_artifact_task)
 
         model_to_pvc_task = model_to_pvc_op(model=model_source_s3_task.output)
+        model_to_pvc_task.after(model_source_s3_task)
         model_to_pvc_task.set_caching_options(False)
         mount_pvc(
-            task=model_to_pvc_task, pvc_name=model_pvc_task.output, mount_path="/model"
+            task=model_to_pvc_task,
+            pvc_name=sdg_input_pvc_task.output,
+            mount_path="/data",
         )
 
         # Data processing
         data_processing_task = data_processing_op(max_batch_len=sdg_max_batch_len)
-        mount_pvc(
-            task=data_processing_task,
-            pvc_name=model_pvc_task.output,
-            mount_path="/model",
-        )
+        data_processing_task.after(model_to_pvc_task)
+        data_processing_task.set_caching_options(False)
         mount_pvc(
             task=data_processing_task,
             pvc_name=sdg_input_pvc_task.output,
             mount_path="/data",
         )
-        data_processing_task.after(model_to_pvc_task, sdg_task)
-        data_processing_task.set_caching_options(False)
 
         set_image_pull_secrets(data_processing_task, [IMAGE_PULL_SECRET])
 
-        # Upload "skills_processed_data" and "knowledge_processed_data" artifacts to S3 without blocking the rest of the workflow
+        # Upload "skills_processed_data" and "knowledge_processed_data" artifacts to S3 without
+        # blocking the rest of the workflow
+        # Do the upload one by one since the PVC is mounted to the task
         skills_processed_data_to_artifact_task = skills_processed_data_to_artifact_op()
         skills_processed_data_to_artifact_task.after(data_processing_task)
         mount_pvc(
@@ -293,7 +310,9 @@ def ilab_pipeline_wrapper(mock: List[Literal[MOCKED_STAGES]]):
         knowledge_processed_data_to_artifact_task = (
             knowledge_processed_data_to_artifact_op()
         )
-        knowledge_processed_data_to_artifact_task.after(data_processing_task)
+        knowledge_processed_data_to_artifact_task.after(
+            skills_processed_data_to_artifact_task
+        )
         mount_pvc(
             task=knowledge_processed_data_to_artifact_task,
             pvc_name=sdg_input_pvc_task.output,
@@ -301,9 +320,38 @@ def ilab_pipeline_wrapper(mock: List[Literal[MOCKED_STAGES]]):
         )
         knowledge_processed_data_to_artifact_task.set_caching_options(False)
 
+        # This PVC is mounted:
+        # - to the pytorchjob_manifest_op task to present the data to the training job
+        snap_name = str(sdg_input_pvc_task.output) + "-snap"
+        sdg_pre_processed_data_create_volume_snapshot_task = create_volume_snapshot_op(
+            snapshot_name=snap_name,
+            volume_name=sdg_input_pvc_task.output,
+            volume_snapshot_class=volume_snapshot_class_name,
+        )
+        sdg_pre_processed_data_create_volume_snapshot_task.after(data_processing_task)
+
+        # This is the PVC that will be used to train the model on the pre-processed data
+        # It will be attached with ROX to the training jobs and mounted in read-only mode
+        sdg_pre_processed_data_create_pvc_from_snapshot_task = (
+            create_pvc_from_snapshot_op(
+                volume_name=SDG_PROCESSED_DATA_PVC_NAME,
+                snapshot_name=snap_name,
+                access_modes=["ReadOnlyMany"],
+                storage="10Gi",
+            )
+        )
+
+        sdg_pre_processed_data_create_pvc_from_snapshot_task.after(
+            sdg_pre_processed_data_create_volume_snapshot_task
+        )
+
+        # This PVC will store the epoch checkpoints and the final model Once
+        # https://github.com/instructlab/training/pull/358 merged and available (1.4?) we can use
+        # the '--keep_last_epoch_only' flag to instructlab.training.main_ds so that it only keeps
+        # the last epoch. The path_to_model will always be /data/model/hf_format/last_epoch
         output_pvc_task = CreatePVC(
             pvc_name_suffix="-output",
-            access_modes=["ReadWriteMany"],
+            access_modes=["ReadWriteOnce"],
             size="100Gi",
             storage_class_name=k8s_storage_class_name,
         )
@@ -312,9 +360,7 @@ def ilab_pipeline_wrapper(mock: List[Literal[MOCKED_STAGES]]):
         # Using pvc_create_task.output as PyTorchJob name since dsl.PIPELINE_* global variables do not template/work in KFP v2
         # https://github.com/kubeflow/pipelines/issues/10453
         training_phase_1 = pytorchjob_manifest_op(
-            model_pvc_name=model_pvc_task.output,
-            input_pvc_name=sdg_input_pvc_task.output,
-            name_suffix=sdg_input_pvc_task.output,
+            input_pvc_name=sdg_pre_processed_data_create_pvc_from_snapshot_task.output,  # use the snapshot PVC to mount it with ROX
             output_pvc_name=output_pvc_task.output,
             phase_num=1,
             nproc_per_node=train_nproc_per_node,
@@ -327,14 +373,22 @@ def ilab_pipeline_wrapper(mock: List[Literal[MOCKED_STAGES]]):
             max_batch_len=train_max_batch_len,
             seed=train_seed,
         )
-        training_phase_1.after(data_processing_task, model_to_pvc_task)
+        training_phase_1.after(output_pvc_task)
         training_phase_1.set_caching_options(False)
+
+        # Get the 7th model from the epoch checkpoints directory
+        list_phase1_final_model_task = list_phase1_final_model_op()
+        list_phase1_final_model_task.after(training_phase_1)
+        list_phase1_final_model_task.set_caching_options(False)
+        mount_pvc(
+            task=list_phase1_final_model_task,
+            pvc_name=output_pvc_task.output,
+            mount_path="/output",
+        )
 
         #### Train 2
         training_phase_2 = pytorchjob_manifest_op(
-            model_pvc_name=model_pvc_task.output,
-            input_pvc_name=sdg_input_pvc_task.output,
-            name_suffix=sdg_input_pvc_task.output,
+            input_pvc_name=sdg_pre_processed_data_create_pvc_from_snapshot_task.output,  # use the snapshot PVC to mount it with ROX
             output_pvc_name=output_pvc_task.output,
             phase_num=2,
             nproc_per_node=train_nproc_per_node,
@@ -346,35 +400,23 @@ def ilab_pipeline_wrapper(mock: List[Literal[MOCKED_STAGES]]):
             save_samples=train_save_samples,
             max_batch_len=train_max_batch_len,
             seed=train_seed,
+            path_to_model=list_phase1_final_model_task.output,
         )
-
+        training_phase_2.after(list_phase1_final_model_task)
         training_phase_2.set_caching_options(False)
-        training_phase_2.after(training_phase_1)
-
-        mount_pvc(
-            task=training_phase_2,
-            pvc_name=output_pvc_task.output,
-            mount_path="/output",
-        )
 
         # MT_Bench Evaluation of models
-
         run_mt_bench_task = run_mt_bench_op(
             models_folder="/output/phase_2/model/hf_format",
             max_workers=mt_bench_max_workers,
             merge_system_user_message=mt_bench_merge_system_user_message,
         )
-        mount_pvc(
-            task=run_mt_bench_task,
-            pvc_name=output_pvc_task.output,
-            mount_path="/output",
-        )
+        run_mt_bench_task.after(training_phase_2)
         run_mt_bench_task.set_env_variable("HOME", "/tmp")
         run_mt_bench_task.set_env_variable("HF_HOME", "/tmp")
         run_mt_bench_task.set_accelerator_type("nvidia.com/gpu")
         run_mt_bench_task.set_accelerator_limit(1)
         run_mt_bench_task.set_caching_options(False)
-        run_mt_bench_task.after(training_phase_2)
         use_config_map_as_env(
             run_mt_bench_task,
             JUDGE_CONFIG_MAP,
@@ -382,6 +424,11 @@ def ilab_pipeline_wrapper(mock: List[Literal[MOCKED_STAGES]]):
         )
         set_image_pull_secrets(run_mt_bench_task, [IMAGE_PULL_SECRET])
         use_secret_as_env(run_mt_bench_task, JUDGE_SECRET, {"api_key": "JUDGE_API_KEY"})
+        mount_pvc(
+            task=run_mt_bench_task,
+            pvc_name=output_pvc_task.output,
+            mount_path="/output",
+        )
 
         # uncomment if updating image with same tag
         # set_image_pull_policy(run_mt_bench_task, "Always")
@@ -391,44 +438,35 @@ def ilab_pipeline_wrapper(mock: List[Literal[MOCKED_STAGES]]):
             # TODO: DO we need both candidate_branch and base_branch
             base_branch=sdg_repo_branch,
             candidate_branch=sdg_repo_branch,
-            base_model_dir="/model/",
+            base_model_dir="/data/model/",
             max_workers=final_eval_max_workers,
             merge_system_user_message=final_eval_merge_system_user_message,
             few_shots=final_eval_few_shots,
             batch_size=final_eval_batch_size,
         )
+        final_eval_task.after(run_mt_bench_task)
+        final_eval_task.set_accelerator_type("nvidia.com/gpu")
+        final_eval_task.set_accelerator_limit(1)
+        use_config_map_as_env(
+            final_eval_task,
+            JUDGE_CONFIG_MAP,
+            dict(endpoint="JUDGE_ENDPOINT", model="JUDGE_NAME"),
+        )
+        use_secret_as_env(final_eval_task, JUDGE_SECRET, {"api_key": "JUDGE_API_KEY"})
+        final_eval_task.set_env_variable("HOME", "/tmp")
+        final_eval_task.set_env_variable("HF_HOME", "/tmp")
+        set_image_pull_secrets(final_eval_task, [IMAGE_PULL_SECRET])
         mount_pvc(
             task=final_eval_task, pvc_name=output_pvc_task.output, mount_path="/output"
         )
         mount_pvc(
             task=final_eval_task,
             pvc_name=sdg_input_pvc_task.output,
-            mount_path="/input",
+            mount_path="/data",
         )
-        mount_pvc(
-            task=final_eval_task,
-            pvc_name=model_pvc_task.output,
-            mount_path="/model",
-        )
-
-        use_config_map_as_env(
-            final_eval_task,
-            JUDGE_CONFIG_MAP,
-            dict(endpoint="JUDGE_ENDPOINT", model="JUDGE_NAME"),
-        )
-
-        final_eval_task.set_env_variable("HOME", "/tmp")
-        final_eval_task.set_env_variable("HF_HOME", "/tmp")
-        set_image_pull_secrets(final_eval_task, [IMAGE_PULL_SECRET])
 
         # uncomment if updating image with same tag
         # set_image_pull_policy(final_eval_task, "Always")
-
-        use_secret_as_env(final_eval_task, JUDGE_SECRET, {"api_key": "JUDGE_API_KEY"})
-
-        final_eval_task.after(run_mt_bench_task)
-        final_eval_task.set_accelerator_type("nvidia.com/gpu")
-        final_eval_task.set_accelerator_limit(1)
 
         output_model_task = pvc_to_model_op(
             pvc_path="/output/phase_2/model/hf_format/candidate_model",
@@ -459,15 +497,18 @@ def ilab_pipeline_wrapper(mock: List[Literal[MOCKED_STAGES]]):
         sdg_pvc_delete_task = DeletePVC(pvc_name=sdg_input_pvc_task.output)
         sdg_pvc_delete_task.after(final_eval_task)
 
-        model_pvc_delete_task = DeletePVC(pvc_name=model_pvc_task.output)
-        model_pvc_delete_task.after(final_eval_task)
+        # Delete the snapshot PVC
+        sdg_snap_pvc_delete_task = DeletePVC(
+            pvc_name=sdg_pre_processed_data_create_pvc_from_snapshot_task.output
+        )
+        sdg_snap_pvc_delete_task.after(sdg_pvc_delete_task)
 
         return
 
     return pipeline
 
 
-def import_base_model_pipeline_wrapper(mock: List[Literal[MOCKED_STAGES]]):
+def import_base_model_pipeline_wrapper(mock: List[Literal[MOCKED_STAGES]]):  #
     from utils import ilab_importer_op
 
     @dsl.pipeline(

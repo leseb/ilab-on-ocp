@@ -34,6 +34,14 @@ oc get pytorchjob
 ```
 
 If an error is shown PyTorch is not available in cluster.
+#### Block Storage:
+
+Require a [storage class](https://kubernetes.io/docs/concepts/storage/storage-classes/) that
+supports ROX (ReadOnlyMany)
+[accessmodes](https://kubernetes.io/docs/concepts/storage/persistent-volumes/#access-modes) to mount
+a PVC on multiple nodes with Filesystem mode in read-only. A
+[VolumeSnapshotClass](https://kubernetes.io/docs/concepts/storage/volume-snapshot-classes/) must be
+available to create snapshots of the persistent volumes.
 
 #### Object Storage:
 
@@ -168,7 +176,7 @@ Once the pipeline is uploaded we will be able to select **"Create run"** from th
 |`final_eval_batch_size` |Final model evaluation parameter for MMLU. Batch size for evaluation. Valid values are a positive integer or 'auto' to select the largest batch size that will fit in memory.|
 |`final_eval_merge_system_user_message` |Final model evaluation parameter for MT Bench Branch. Boolean indicating whether to merge system and user messages (required for Mistral based judges)|
 |`k8s_storage_class_name` |A Kubernetes StorageClass name for persistent volumes. Selected StorageClass must support RWX PersistentVolumes.|
-
+|`volume_snapshot_class_name` |A Kubernetes VolumeSnapshotClass name for volume snapshots.|
 
 ### Customize the Pipeline
 

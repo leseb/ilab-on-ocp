@@ -122,12 +122,10 @@ def knowledge_processed_data_to_artifact_op(
 
 @dsl.component(base_image=PYTHON_IMAGE, install_kfp_package=False)
 def pytorchjob_manifest_op(
-    model_pvc_name: str,
     input_pvc_name: str,
     output_pvc_name: str,
-    name_suffix: str,
-    # path_to_model: str,
     phase_num: int,
+    path_to_model: str = None,
     nproc_per_node: int = 3,
     nnodes: int = 2,
     num_epochs: int = 2,
@@ -139,31 +137,23 @@ def pytorchjob_manifest_op(
     seed: int = 42,
 ):
     import inspect
-    import os
     import time
 
     import kubernetes
     import urllib3
     import yaml
 
-    def list_phase1_final_model():
-        model_dir = "/output/phase_1/model/hf_format"
-        models = os.listdir(model_dir)
-        newest_idx = max(
-            (os.path.getmtime(f"{model_dir}/{model}"), i)
-            for i, model in enumerate(models)
-        )[-1]
-        newest_model = models[newest_idx]
-        return f"{model_dir}/{newest_model}"
-
-    name = f"train-phase-{phase_num}-{name_suffix.rstrip('-sdg')}"
+    name = f"train-phase-{phase_num}"
 
     if phase_num == 1:
-        path_to_model = "/input_model"
-        path_to_data = "/input_data/knowledge/data.jsonl"
+        path_to_model = "/data/model"
+        path_to_data = "/data/knowledge/data.jsonl"
     elif phase_num == 2:
-        path_to_model = list_phase1_final_model()
-        path_to_data = "/input_data/skills/data.jsonl"
+        # If None, this means the caller forgot to pass the path_to_model
+        # We need path_to_data to point to the epoch7 directory
+        if path_to_model is None:
+            raise RuntimeError("path_to_model is required for phase 2")
+        path_to_data = "/data/skills/data.jsonl"
     else:
         raise RuntimeError(f"Unsupported value of {phase_num=}")
 
@@ -222,11 +212,8 @@ def pytorchjob_manifest_op(
                       image: {image}
                       name: pytorch
                       volumeMounts:
-                        - mountPath: /input_data
+                        - mountPath: /data
                           name: input-data
-                          readOnly: true
-                        - mountPath: /input_model
-                          name: model
                           readOnly: true
                         - mountPath: /output
                           name: output
@@ -254,9 +241,6 @@ def pytorchjob_manifest_op(
                     - name: input-data
                       persistentVolumeClaim:
                         claimName: {input_pvc_name}
-                    - name: model
-                      persistentVolumeClaim:
-                        claimName: {model_pvc_name}
                     - name: output
                       persistentVolumeClaim:
                         claimName: {output_pvc_name}
@@ -303,14 +287,8 @@ def pytorchjob_manifest_op(
                       image: {image}
                       name: pytorch
                       volumeMounts:
-                        - mountPath: /input_data
+                        - mountPath: /data
                           name: input-data
-                          readOnly: true
-                        - mountPath: /input_model
-                          name: model
-                          readOnly: true
-                        - mountPath: /output
-                          name: output
                           readOnly: true
                       env:
                         - name: NNODES
@@ -336,12 +314,7 @@ def pytorchjob_manifest_op(
                     - name: input-data
                       persistentVolumeClaim:
                         claimName: {input_pvc_name}
-                    - name: model
-                      persistentVolumeClaim:
-                        claimName: {model_pvc_name}
-                    - name: output
-                      persistentVolumeClaim:
-                        claimName: {output_pvc_name}
+
         """
     )
 

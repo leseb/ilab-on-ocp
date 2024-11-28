@@ -6,7 +6,7 @@
 #    final_eval_few_shots: int [Default: 5.0]
 #    final_eval_max_workers: str [Default: 'auto']
 #    final_eval_merge_system_user_message: bool [Default: False]
-#    k8s_storage_class_name: str [Default: 'nfs-csi']
+#    k8s_storage_class_name: str [Default: 'ocs-external-storagecluster-ceph-rbd']
 #    mt_bench_max_workers: str [Default: 'auto']
 #    mt_bench_merge_system_user_message: bool [Default: False]
 #    sdg_base_model: str [Default: 's3://ilab-pipeline-b1d4c2b1-ab00-4e7f-b985-697bda3df385/instructlab-base-importer/648f36d0-e3f0-43b8-8adb-530576beb675/ilab-importer-op/model/granite-7b-starter']
@@ -30,7 +30,34 @@
 #    train_num_warmup_steps_phase_2: int [Default: 100.0]
 #    train_save_samples: int [Default: 0.0]
 #    train_seed: int [Default: 42.0]
+#    volume_snapshot_class_name: str [Default: 'ocs-external-storagecluster-rbdplugin-snapclass']
 components:
+  comp-create-pvc-from-snapshot-op:
+    executorLabel: exec-create-pvc-from-snapshot-op
+    inputDefinitions:
+      parameters:
+        access_modes:
+          parameterType: LIST
+        snapshot_name:
+          parameterType: STRING
+        storage:
+          parameterType: STRING
+        volume_name:
+          parameterType: STRING
+    outputDefinitions:
+      parameters:
+        Output:
+          parameterType: STRING
+  comp-create-volume-snapshot-op:
+    executorLabel: exec-create-volume-snapshot-op
+    inputDefinitions:
+      parameters:
+        snapshot_name:
+          parameterType: STRING
+        volume_name:
+          parameterType: STRING
+        volume_snapshot_class:
+          parameterType: STRING
   comp-createpvc:
     executorLabel: exec-createpvc
     inputDefinitions:
@@ -94,67 +121,6 @@ components:
           parameterType: STRING
   comp-createpvc-2:
     executorLabel: exec-createpvc-2
-    inputDefinitions:
-      parameters:
-        access_modes:
-          description: 'AccessModes to request for the provisioned PVC. May
-
-            be one or more of ``''ReadWriteOnce''``, ``''ReadOnlyMany''``, ``''ReadWriteMany''``,
-            or
-
-            ``''ReadWriteOncePod''``. Corresponds to `PersistentVolumeClaim.spec.accessModes
-            <https://kubernetes.io/docs/concepts/storage/persistent-volumes/#access-modes>`_.'
-          parameterType: LIST
-        annotations:
-          description: Annotations for the PVC's metadata. Corresponds to `PersistentVolumeClaim.metadata.annotations
-            <https://kubernetes.io/docs/reference/kubernetes-api/config-and-storage-resources/persistent-volume-claim-v1/#PersistentVolumeClaim>`_.
-          isOptional: true
-          parameterType: STRUCT
-        pvc_name:
-          description: 'Name of the PVC. Corresponds to `PersistentVolumeClaim.metadata.name
-            <https://kubernetes.io/docs/reference/kubernetes-api/config-and-storage-resources/persistent-volume-claim-v1/#PersistentVolumeClaim>`_.
-            Only one of ``pvc_name`` and ``pvc_name_suffix`` can
-
-            be provided.'
-          isOptional: true
-          parameterType: STRING
-        pvc_name_suffix:
-          description: 'Prefix to use for a dynamically generated name, which
-
-            will take the form ``<argo-workflow-name>-<pvc_name_suffix>``. Only one
-
-            of ``pvc_name`` and ``pvc_name_suffix`` can be provided.'
-          isOptional: true
-          parameterType: STRING
-        size:
-          description: The size of storage requested by the PVC that will be provisioned.
-            For example, ``'5Gi'``. Corresponds to `PersistentVolumeClaim.spec.resources.requests.storage
-            <https://kubernetes.io/docs/reference/kubernetes-api/config-and-storage-resources/persistent-volume-claim-v1/#PersistentVolumeClaimSpec>`_.
-          parameterType: STRING
-        storage_class_name:
-          defaultValue: ''
-          description: 'Name of StorageClass from which to provision the PV
-
-            to back the PVC. ``None`` indicates to use the cluster''s default
-
-            storage_class_name. Set to ``''''`` for a statically specified PVC.'
-          isOptional: true
-          parameterType: STRING
-        volume_name:
-          description: 'Pre-existing PersistentVolume that should back the
-
-            provisioned PersistentVolumeClaim. Used for statically
-
-            specified PV only. Corresponds to `PersistentVolumeClaim.spec.volumeName
-            <https://kubernetes.io/docs/reference/kubernetes-api/config-and-storage-resources/persistent-volume-claim-v1/#PersistentVolumeClaimSpec>`_.'
-          isOptional: true
-          parameterType: STRING
-    outputDefinitions:
-      parameters:
-        name:
-          parameterType: STRING
-  comp-createpvc-3:
-    executorLabel: exec-createpvc-3
     inputDefinitions:
       parameters:
         access_modes:
@@ -306,6 +272,12 @@ components:
           artifactType:
             schemaTitle: system.Dataset
             schemaVersion: 0.0.1
+  comp-list-phase1-final-model-op:
+    executorLabel: exec-list-phase1-final-model-op
+    outputDefinitions:
+      parameters:
+        Output:
+          parameterType: STRING
   comp-model-to-pvc-op:
     executorLabel: exec-model-to-pvc-op
     inputDefinitions:
@@ -316,7 +288,7 @@ components:
             schemaVersion: 0.0.1
       parameters:
         pvc_path:
-          defaultValue: /model
+          defaultValue: /data/model
           isOptional: true
           parameterType: STRING
   comp-pvc-to-model-op:
@@ -361,10 +333,6 @@ components:
           defaultValue: 20000.0
           isOptional: true
           parameterType: NUMBER_INTEGER
-        model_pvc_name:
-          parameterType: STRING
-        name_suffix:
-          parameterType: STRING
         nnodes:
           defaultValue: 2.0
           isOptional: true
@@ -382,6 +350,9 @@ components:
           isOptional: true
           parameterType: NUMBER_INTEGER
         output_pvc_name:
+          parameterType: STRING
+        path_to_model:
+          isOptional: true
           parameterType: STRING
         phase_num:
           parameterType: NUMBER_INTEGER
@@ -411,10 +382,6 @@ components:
           defaultValue: 20000.0
           isOptional: true
           parameterType: NUMBER_INTEGER
-        model_pvc_name:
-          parameterType: STRING
-        name_suffix:
-          parameterType: STRING
         nnodes:
           defaultValue: 2.0
           isOptional: true
@@ -432,6 +399,9 @@ components:
           isOptional: true
           parameterType: NUMBER_INTEGER
         output_pvc_name:
+          parameterType: STRING
+        path_to_model:
+          isOptional: true
           parameterType: STRING
         phase_num:
           parameterType: NUMBER_INTEGER
@@ -573,13 +543,83 @@ components:
             schemaVersion: 0.0.1
 deploymentSpec:
   executors:
+    exec-create-pvc-from-snapshot-op:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - create_pvc_from_snapshot_op
+        command:
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef create_pvc_from_snapshot_op(\n    volume_name: str, snapshot_name:\
+          \ str, access_modes: list, storage: str\n) -> str:\n    import uuid\n\n\
+          \    import kubernetes\n    import kubernetes.client\n\n    try:\n     \
+          \   kubernetes.config.load_kube_config()\n        print(\"Loaded kube config\"\
+          )\n    except kubernetes.config.ConfigException:\n        print(\"Failed\
+          \ to load kube config. Trying in-cluster config\")\n        kubernetes.config.load_incluster_config()\n\
+          \n    api = kubernetes.client.CoreV1Api()\n    volume_full_name = volume_name\
+          \ + uuid.uuid4().hex[:8]\n\n    body = {\n        \"apiVersion\": \"v1\"\
+          ,\n        \"kind\": \"PersistentVolumeClaim\",\n        \"metadata\": {\"\
+          name\": volume_full_name},\n        \"spec\": {\n            \"dataSource\"\
+          : {\n                \"name\": snapshot_name,\n                \"kind\"\
+          : \"VolumeSnapshot\",\n                \"apiGroup\": \"snapshot.storage.k8s.io\"\
+          ,\n            },\n            \"accessModes\": access_modes,\n        \
+          \    \"resources\": {\"requests\": {\"storage\": storage}},\n        },\n\
+          \    }\n\n    try:\n        # create the resource\n        api.create_namespaced_persistent_volume_claim(\n\
+          \            namespace=\"admin\",\n            body=body,\n        )\n \
+          \   except kubernetes.client.rest.ApiException as exc:\n        if exc.status\
+          \ == 409:\n            print(\"Snapshot already exists\")\n        else:\n\
+          \            raise\n\n    return volume_full_name\n\n"
+        image: quay.io/modh/odh-generic-data-science-notebook:v3-2024b-20241111
+    exec-create-volume-snapshot-op:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - create_volume_snapshot_op
+        command:
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef create_volume_snapshot_op(\n    snapshot_name: str, volume_name:\
+          \ str, volume_snapshot_class: str\n):\n    import kubernetes\n    import\
+          \ kubernetes.client\n\n    try:\n        kubernetes.config.load_kube_config()\n\
+          \        print(\"Loaded kube config\")\n    except kubernetes.config.ConfigException:\n\
+          \        print(\"Failed to load kube config. Trying in-cluster config\"\
+          )\n        kubernetes.config.load_incluster_config()\n\n    api = kubernetes.client.CoreV1Api()\n\
+          \n    body = {\n        \"apiVersion\": \"snapshot.storage.k8s.io/v1beta1\"\
+          ,\n        \"kind\": \"VolumeSnapshot\",\n        \"metadata\": {\"name\"\
+          : snapshot_name},\n        \"spec\": {\n            \"volumeSnapshotClassName\"\
+          : volume_snapshot_class,\n            \"source\": {\"persistentVolumeClaimName\"\
+          : volume_name},\n        },\n    }\n\n    try:\n        api.create_namespaced_custom_object(\"\
+          default\", body=body)\n    except kubernetes.client.rest.ApiException as\
+          \ exc:\n        if exc.status == 409:\n            print(\"Snapshot already\
+          \ exists\")\n        else:\n            raise\n\n"
+        image: quay.io/modh/odh-generic-data-science-notebook:v3-2024b-20241111
     exec-createpvc:
       container:
         image: argostub/createpvc
     exec-createpvc-2:
-      container:
-        image: argostub/createpvc
-    exec-createpvc-3:
       container:
         image: argostub/createpvc
     exec-data-processing-op:
@@ -684,10 +724,36 @@ deploymentSpec:
         - /bin/sh
         - -c
         image: registry.access.redhat.com/ubi9/toolbox
+    exec-list-phase1-final-model-op:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - list_phase1_final_model_op
+        command:
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef list_phase1_final_model_op() -> str:\n    import os\n\n    model_dir\
+          \ = \"/output/phase_1/model/hf_format\"\n    models = os.listdir(model_dir)\n\
+          \    newest_idx = max(\n        (os.path.getmtime(f\"{model_dir}/{model}\"\
+          ), i) for i, model in enumerate(models)\n    )[-1]\n    newest_model = models[newest_idx]\n\
+          \    return f\"{model_dir}/{newest_model}\"\n\n"
+        image: quay.io/modh/odh-generic-data-science-notebook:v3-2024b-20241111
     exec-model-to-pvc-op:
       container:
         args:
-        - cp -r {{$.inputs.artifacts['model'].path}}/* {{$.inputs.parameters['pvc_path']}}
+        - mkdir -p {{$.inputs.parameters['pvc_path']}} && cp -r {{$.inputs.artifacts['model'].path}}/*
+          {{$.inputs.parameters['pvc_path']}}
         command:
         - /bin/sh
         - -c
@@ -727,33 +793,29 @@ deploymentSpec:
 
           '
         - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
-          \ *\n\ndef pytorchjob_manifest_op(\n    model_pvc_name: str,\n    input_pvc_name:\
-          \ str,\n    output_pvc_name: str,\n    name_suffix: str,\n    # path_to_model:\
-          \ str,\n    phase_num: int,\n    nproc_per_node: int = 3,\n    nnodes: int\
-          \ = 2,\n    num_epochs: int = 2,\n    effective_batch_size: int = 3840,\n\
-          \    learning_rate: float = 1e-4,\n    num_warmup_steps: int = 800,\n  \
-          \  save_samples: int = 0,\n    max_batch_len: int = 20000,\n    seed: int\
-          \ = 42,\n):\n    import inspect\n    import os\n    import time\n\n    import\
-          \ kubernetes\n    import urllib3\n    import yaml\n\n    def list_phase1_final_model():\n\
-          \        model_dir = \"/output/phase_1/model/hf_format\"\n        models\
-          \ = os.listdir(model_dir)\n        newest_idx = max(\n            (os.path.getmtime(f\"\
-          {model_dir}/{model}\"), i)\n            for i, model in enumerate(models)\n\
-          \        )[-1]\n        newest_model = models[newest_idx]\n        return\
-          \ f\"{model_dir}/{newest_model}\"\n\n    name = f\"train-phase-{phase_num}-{name_suffix.rstrip('-sdg')}\"\
-          \n\n    if phase_num == 1:\n        path_to_model = \"/input_model\"\n \
-          \       path_to_data = \"/input_data/knowledge/data.jsonl\"\n    elif phase_num\
-          \ == 2:\n        path_to_model = list_phase1_final_model()\n        path_to_data\
-          \ = \"/input_data/skills/data.jsonl\"\n    else:\n        raise RuntimeError(f\"\
-          Unsupported value of {phase_num=}\")\n\n    image = \"quay.io/redhat-et/ilab:1.2\"\
-          \n\n    manifest = inspect.cleandoc(\n        f\"\"\"\n        apiVersion:\
-          \ kubeflow.org/v1\n        kind: PyTorchJob\n        metadata:\n       \
-          \   name: {name}\n        spec:\n          nprocPerNode: \\\"{nproc_per_node}\\\
-          \"\n          pytorchReplicaSpecs:\n            Master:\n              replicas:\
-          \ 1\n              restartPolicy: OnFailure\n              template:\n \
-          \               metadata:\n                  annotations:\n            \
-          \        sidecar.istio.io/inject: 'false'\n                spec:\n     \
-          \             containers:\n                    - args:\n               \
-          \         - |\n                          echo \"Running phase {phase_num}\"\
+          \ *\n\ndef pytorchjob_manifest_op(\n    input_pvc_name: str,\n    output_pvc_name:\
+          \ str,\n    phase_num: int,\n    path_to_model: str = None,\n    nproc_per_node:\
+          \ int = 3,\n    nnodes: int = 2,\n    num_epochs: int = 2,\n    effective_batch_size:\
+          \ int = 3840,\n    learning_rate: float = 1e-4,\n    num_warmup_steps: int\
+          \ = 800,\n    save_samples: int = 0,\n    max_batch_len: int = 20000,\n\
+          \    seed: int = 42,\n):\n    import inspect\n    import time\n\n    import\
+          \ kubernetes\n    import urllib3\n    import yaml\n\n    name = f\"train-phase-{phase_num}\"\
+          \n\n    if phase_num == 1:\n        path_to_model = \"/data/model\"\n  \
+          \      path_to_data = \"/data/knowledge/data.jsonl\"\n    elif phase_num\
+          \ == 2:\n        # If None, this means the caller forgot to pass the path_to_model\n\
+          \        # We need path_to_data to point to the epoch7 directory\n     \
+          \   if path_to_model is None:\n            raise RuntimeError(\"path_to_model\
+          \ is required for phase 2\")\n        path_to_data = \"/data/skills/data.jsonl\"\
+          \n    else:\n        raise RuntimeError(f\"Unsupported value of {phase_num=}\"\
+          )\n\n    image = \"quay.io/redhat-et/ilab:1.2\"\n\n    manifest = inspect.cleandoc(\n\
+          \        f\"\"\"\n        apiVersion: kubeflow.org/v1\n        kind: PyTorchJob\n\
+          \        metadata:\n          name: {name}\n        spec:\n          nprocPerNode:\
+          \ \\\"{nproc_per_node}\\\"\n          pytorchReplicaSpecs:\n           \
+          \ Master:\n              replicas: 1\n              restartPolicy: OnFailure\n\
+          \              template:\n                metadata:\n                  annotations:\n\
+          \                    sidecar.istio.io/inject: 'false'\n                spec:\n\
+          \                  containers:\n                    - args:\n          \
+          \              - |\n                          echo \"Running phase {phase_num}\"\
           \n                          echo \"Using {path_to_model} model for training\"\
           \n                          echo \"Using {path_to_data} data for training\"\
           \n                          mkdir -p /output/phase_{phase_num}/model;\n\
@@ -780,45 +842,41 @@ deploymentSpec:
           \                       - '-c'\n                        - '--'\n       \
           \               image: {image}\n                      name: pytorch\n  \
           \                    volumeMounts:\n                        - mountPath:\
-          \ /input_data\n                          name: input-data\n            \
-          \              readOnly: true\n                        - mountPath: /input_model\n\
-          \                          name: model\n                          readOnly:\
-          \ true\n                        - mountPath: /output\n                 \
-          \         name: output\n                      env:\n                   \
-          \     - name: NNODES\n                          value: \\\"{nnodes}\\\"\n\
-          \                        - name: NPROC_PER_NODE\n                      \
-          \    value: \\\"{nproc_per_node}\\\"\n                        - name: XDG_CACHE_HOME\n\
-          \                          value: /tmp\n                        - name:\
-          \ TRITON_CACHE_DIR\n                          value: /tmp\n            \
-          \            - name: HF_HOME\n                          value: /tmp\n  \
-          \                      - name: TRANSFORMERS_CACHE\n                    \
-          \      value: /tmp\n                      resources:\n                 \
-          \       requests:\n                          cpu: 8\n                  \
-          \        \"nvidia.com/gpu\": {nproc_per_node}\n                        limits:\n\
-          \                          cpu: 8\n                          \"nvidia.com/gpu\"\
-          : {nproc_per_node}\n                  volumes:\n                    - name:\
-          \ input-data\n                      persistentVolumeClaim:\n           \
-          \             claimName: {input_pvc_name}\n                    - name: model\n\
-          \                      persistentVolumeClaim:\n                        claimName:\
-          \ {model_pvc_name}\n                    - name: output\n               \
-          \       persistentVolumeClaim:\n                        claimName: {output_pvc_name}\n\
-          \            Worker:\n              replicas: {nnodes-1}\n             \
-          \ restartPolicy: OnFailure\n              template:\n                metadata:\n\
-          \                  annotations:\n                    sidecar.istio.io/inject:\
-          \ 'false'\n                spec:\n                  containers:\n      \
-          \              - args:\n                        - |\n                  \
-          \        echo \"Running phase {phase_num}\"\n                          echo\
-          \ \"Using {path_to_model} model for training\"\n                       \
-          \   echo \"Using {path_to_data} data for training\"\n                  \
-          \        mkdir -p /tmp/model;\n                          torchrun --nnodes\
-          \ {nnodes} \\\n                            --nproc_per_node {nproc_per_node}\
-          \ \\\n                            --node_rank \\$(RANK) \\\n           \
-          \                 --rdzv_endpoint \\$(MASTER_ADDR):\\$(MASTER_PORT) \\\n\
-          \                            -m instructlab.training.main_ds \\\n      \
-          \                      --model_name_or_path={path_to_model} \\\n       \
-          \                     --data_path={path_to_data} \\\n                  \
-          \          --output_dir=/tmp/model \\\n                            --num_epochs={num_epochs}\
-          \ \\\n                            --effective_batch_size={effective_batch_size}\
+          \ /data\n                          name: input-data\n                  \
+          \        readOnly: true\n                        - mountPath: /output\n\
+          \                          name: output\n                      env:\n  \
+          \                      - name: NNODES\n                          value:\
+          \ \\\"{nnodes}\\\"\n                        - name: NPROC_PER_NODE\n   \
+          \                       value: \\\"{nproc_per_node}\\\"\n              \
+          \          - name: XDG_CACHE_HOME\n                          value: /tmp\n\
+          \                        - name: TRITON_CACHE_DIR\n                    \
+          \      value: /tmp\n                        - name: HF_HOME\n          \
+          \                value: /tmp\n                        - name: TRANSFORMERS_CACHE\n\
+          \                          value: /tmp\n                      resources:\n\
+          \                        requests:\n                          cpu: 8\n \
+          \                         \"nvidia.com/gpu\": {nproc_per_node}\n       \
+          \                 limits:\n                          cpu: 8\n          \
+          \                \"nvidia.com/gpu\": {nproc_per_node}\n                \
+          \  volumes:\n                    - name: input-data\n                  \
+          \    persistentVolumeClaim:\n                        claimName: {input_pvc_name}\n\
+          \                    - name: output\n                      persistentVolumeClaim:\n\
+          \                        claimName: {output_pvc_name}\n            Worker:\n\
+          \              replicas: {nnodes-1}\n              restartPolicy: OnFailure\n\
+          \              template:\n                metadata:\n                  annotations:\n\
+          \                    sidecar.istio.io/inject: 'false'\n                spec:\n\
+          \                  containers:\n                    - args:\n          \
+          \              - |\n                          echo \"Running phase {phase_num}\"\
+          \n                          echo \"Using {path_to_model} model for training\"\
+          \n                          echo \"Using {path_to_data} data for training\"\
+          \n                          mkdir -p /tmp/model;\n                     \
+          \     torchrun --nnodes {nnodes} \\\n                            --nproc_per_node\
+          \ {nproc_per_node} \\\n                            --node_rank \\$(RANK)\
+          \ \\\n                            --rdzv_endpoint \\$(MASTER_ADDR):\\$(MASTER_PORT)\
+          \ \\\n                            -m instructlab.training.main_ds \\\n \
+          \                           --model_name_or_path={path_to_model} \\\n  \
+          \                          --data_path={path_to_data} \\\n             \
+          \               --output_dir=/tmp/model \\\n                           \
+          \ --num_epochs={num_epochs} \\\n                            --effective_batch_size={effective_batch_size}\
           \ \\\n                            --learning_rate={learning_rate} \\\n \
           \                           --num_warmup_steps={num_warmup_steps} \\\n \
           \                           --save_samples={save_samples} \\\n         \
@@ -831,19 +889,15 @@ deploymentSpec:
           \                 - /bin/bash\n                        - '-c'\n        \
           \                - '--'\n                      image: {image}\n        \
           \              name: pytorch\n                      volumeMounts:\n    \
-          \                    - mountPath: /input_data\n                        \
-          \  name: input-data\n                          readOnly: true\n        \
-          \                - mountPath: /input_model\n                          name:\
-          \ model\n                          readOnly: true\n                    \
-          \    - mountPath: /output\n                          name: output\n    \
-          \                      readOnly: true\n                      env:\n    \
-          \                    - name: NNODES\n                          value: \\\
-          \"{nnodes}\\\"\n                        - name: NPROC_PER_NODE\n       \
-          \                   value: \\\"{nproc_per_node}\\\"\n                  \
-          \      - name: XDG_CACHE_HOME\n                          value: /tmp\n \
-          \                       - name: TRITON_CACHE_DIR\n                     \
-          \     value: /tmp\n                        - name: HF_HOME\n           \
-          \               value: /tmp\n                        - name: TRANSFORMERS_CACHE\n\
+          \                    - mountPath: /data\n                          name:\
+          \ input-data\n                          readOnly: true\n               \
+          \       env:\n                        - name: NNODES\n                 \
+          \         value: \\\"{nnodes}\\\"\n                        - name: NPROC_PER_NODE\n\
+          \                          value: \\\"{nproc_per_node}\\\"\n           \
+          \             - name: XDG_CACHE_HOME\n                          value: /tmp\n\
+          \                        - name: TRITON_CACHE_DIR\n                    \
+          \      value: /tmp\n                        - name: HF_HOME\n          \
+          \                value: /tmp\n                        - name: TRANSFORMERS_CACHE\n\
           \                          value: /tmp\n                      resources:\n\
           \                        requests:\n                          cpu: 8\n \
           \                         \"nvidia.com/gpu\": {nproc_per_node}\n       \
@@ -851,14 +905,10 @@ deploymentSpec:
           \                \"nvidia.com/gpu\": {nproc_per_node}\n                \
           \  volumes:\n                    - name: input-data\n                  \
           \    persistentVolumeClaim:\n                        claimName: {input_pvc_name}\n\
-          \                    - name: model\n                      persistentVolumeClaim:\n\
-          \                        claimName: {model_pvc_name}\n                 \
-          \   - name: output\n                      persistentVolumeClaim:\n     \
-          \                   claimName: {output_pvc_name}\n        \"\"\"\n    )\n\
-          \n    try:\n        manifest_yaml = yaml.safe_load(manifest)\n    except\
-          \ yaml.YAMLError as exc:\n        raise RuntimeError(f\"Error parsing manifest:\
-          \ {exc}\") from exc\n\n    # Discover the namespace in which the pod is\
-          \ running\n    with open(\n        \"/var/run/secrets/kubernetes.io/serviceaccount/namespace\"\
+          \n        \"\"\"\n    )\n\n    try:\n        manifest_yaml = yaml.safe_load(manifest)\n\
+          \    except yaml.YAMLError as exc:\n        raise RuntimeError(f\"Error\
+          \ parsing manifest: {exc}\") from exc\n\n    # Discover the namespace in\
+          \ which the pod is running\n    with open(\n        \"/var/run/secrets/kubernetes.io/serviceaccount/namespace\"\
           , \"r\", encoding=\"utf-8\"\n    ) as f:\n        namespace = f.read().strip()\n\
           \        print(f\"The pod is running in the namespace: {namespace}\")\n\n\
           \    try:\n        kubernetes.config.load_kube_config()\n        print(\"\
@@ -934,33 +984,29 @@ deploymentSpec:
 
           '
         - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
-          \ *\n\ndef pytorchjob_manifest_op(\n    model_pvc_name: str,\n    input_pvc_name:\
-          \ str,\n    output_pvc_name: str,\n    name_suffix: str,\n    # path_to_model:\
-          \ str,\n    phase_num: int,\n    nproc_per_node: int = 3,\n    nnodes: int\
-          \ = 2,\n    num_epochs: int = 2,\n    effective_batch_size: int = 3840,\n\
-          \    learning_rate: float = 1e-4,\n    num_warmup_steps: int = 800,\n  \
-          \  save_samples: int = 0,\n    max_batch_len: int = 20000,\n    seed: int\
-          \ = 42,\n):\n    import inspect\n    import os\n    import time\n\n    import\
-          \ kubernetes\n    import urllib3\n    import yaml\n\n    def list_phase1_final_model():\n\
-          \        model_dir = \"/output/phase_1/model/hf_format\"\n        models\
-          \ = os.listdir(model_dir)\n        newest_idx = max(\n            (os.path.getmtime(f\"\
-          {model_dir}/{model}\"), i)\n            for i, model in enumerate(models)\n\
-          \        )[-1]\n        newest_model = models[newest_idx]\n        return\
-          \ f\"{model_dir}/{newest_model}\"\n\n    name = f\"train-phase-{phase_num}-{name_suffix.rstrip('-sdg')}\"\
-          \n\n    if phase_num == 1:\n        path_to_model = \"/input_model\"\n \
-          \       path_to_data = \"/input_data/knowledge/data.jsonl\"\n    elif phase_num\
-          \ == 2:\n        path_to_model = list_phase1_final_model()\n        path_to_data\
-          \ = \"/input_data/skills/data.jsonl\"\n    else:\n        raise RuntimeError(f\"\
-          Unsupported value of {phase_num=}\")\n\n    image = \"quay.io/redhat-et/ilab:1.2\"\
-          \n\n    manifest = inspect.cleandoc(\n        f\"\"\"\n        apiVersion:\
-          \ kubeflow.org/v1\n        kind: PyTorchJob\n        metadata:\n       \
-          \   name: {name}\n        spec:\n          nprocPerNode: \\\"{nproc_per_node}\\\
-          \"\n          pytorchReplicaSpecs:\n            Master:\n              replicas:\
-          \ 1\n              restartPolicy: OnFailure\n              template:\n \
-          \               metadata:\n                  annotations:\n            \
-          \        sidecar.istio.io/inject: 'false'\n                spec:\n     \
-          \             containers:\n                    - args:\n               \
-          \         - |\n                          echo \"Running phase {phase_num}\"\
+          \ *\n\ndef pytorchjob_manifest_op(\n    input_pvc_name: str,\n    output_pvc_name:\
+          \ str,\n    phase_num: int,\n    path_to_model: str = None,\n    nproc_per_node:\
+          \ int = 3,\n    nnodes: int = 2,\n    num_epochs: int = 2,\n    effective_batch_size:\
+          \ int = 3840,\n    learning_rate: float = 1e-4,\n    num_warmup_steps: int\
+          \ = 800,\n    save_samples: int = 0,\n    max_batch_len: int = 20000,\n\
+          \    seed: int = 42,\n):\n    import inspect\n    import time\n\n    import\
+          \ kubernetes\n    import urllib3\n    import yaml\n\n    name = f\"train-phase-{phase_num}\"\
+          \n\n    if phase_num == 1:\n        path_to_model = \"/data/model\"\n  \
+          \      path_to_data = \"/data/knowledge/data.jsonl\"\n    elif phase_num\
+          \ == 2:\n        # If None, this means the caller forgot to pass the path_to_model\n\
+          \        # We need path_to_data to point to the epoch7 directory\n     \
+          \   if path_to_model is None:\n            raise RuntimeError(\"path_to_model\
+          \ is required for phase 2\")\n        path_to_data = \"/data/skills/data.jsonl\"\
+          \n    else:\n        raise RuntimeError(f\"Unsupported value of {phase_num=}\"\
+          )\n\n    image = \"quay.io/redhat-et/ilab:1.2\"\n\n    manifest = inspect.cleandoc(\n\
+          \        f\"\"\"\n        apiVersion: kubeflow.org/v1\n        kind: PyTorchJob\n\
+          \        metadata:\n          name: {name}\n        spec:\n          nprocPerNode:\
+          \ \\\"{nproc_per_node}\\\"\n          pytorchReplicaSpecs:\n           \
+          \ Master:\n              replicas: 1\n              restartPolicy: OnFailure\n\
+          \              template:\n                metadata:\n                  annotations:\n\
+          \                    sidecar.istio.io/inject: 'false'\n                spec:\n\
+          \                  containers:\n                    - args:\n          \
+          \              - |\n                          echo \"Running phase {phase_num}\"\
           \n                          echo \"Using {path_to_model} model for training\"\
           \n                          echo \"Using {path_to_data} data for training\"\
           \n                          mkdir -p /output/phase_{phase_num}/model;\n\
@@ -987,45 +1033,41 @@ deploymentSpec:
           \                       - '-c'\n                        - '--'\n       \
           \               image: {image}\n                      name: pytorch\n  \
           \                    volumeMounts:\n                        - mountPath:\
-          \ /input_data\n                          name: input-data\n            \
-          \              readOnly: true\n                        - mountPath: /input_model\n\
-          \                          name: model\n                          readOnly:\
-          \ true\n                        - mountPath: /output\n                 \
-          \         name: output\n                      env:\n                   \
-          \     - name: NNODES\n                          value: \\\"{nnodes}\\\"\n\
-          \                        - name: NPROC_PER_NODE\n                      \
-          \    value: \\\"{nproc_per_node}\\\"\n                        - name: XDG_CACHE_HOME\n\
-          \                          value: /tmp\n                        - name:\
-          \ TRITON_CACHE_DIR\n                          value: /tmp\n            \
-          \            - name: HF_HOME\n                          value: /tmp\n  \
-          \                      - name: TRANSFORMERS_CACHE\n                    \
-          \      value: /tmp\n                      resources:\n                 \
-          \       requests:\n                          cpu: 8\n                  \
-          \        \"nvidia.com/gpu\": {nproc_per_node}\n                        limits:\n\
-          \                          cpu: 8\n                          \"nvidia.com/gpu\"\
-          : {nproc_per_node}\n                  volumes:\n                    - name:\
-          \ input-data\n                      persistentVolumeClaim:\n           \
-          \             claimName: {input_pvc_name}\n                    - name: model\n\
-          \                      persistentVolumeClaim:\n                        claimName:\
-          \ {model_pvc_name}\n                    - name: output\n               \
-          \       persistentVolumeClaim:\n                        claimName: {output_pvc_name}\n\
-          \            Worker:\n              replicas: {nnodes-1}\n             \
-          \ restartPolicy: OnFailure\n              template:\n                metadata:\n\
-          \                  annotations:\n                    sidecar.istio.io/inject:\
-          \ 'false'\n                spec:\n                  containers:\n      \
-          \              - args:\n                        - |\n                  \
-          \        echo \"Running phase {phase_num}\"\n                          echo\
-          \ \"Using {path_to_model} model for training\"\n                       \
-          \   echo \"Using {path_to_data} data for training\"\n                  \
-          \        mkdir -p /tmp/model;\n                          torchrun --nnodes\
-          \ {nnodes} \\\n                            --nproc_per_node {nproc_per_node}\
-          \ \\\n                            --node_rank \\$(RANK) \\\n           \
-          \                 --rdzv_endpoint \\$(MASTER_ADDR):\\$(MASTER_PORT) \\\n\
-          \                            -m instructlab.training.main_ds \\\n      \
-          \                      --model_name_or_path={path_to_model} \\\n       \
-          \                     --data_path={path_to_data} \\\n                  \
-          \          --output_dir=/tmp/model \\\n                            --num_epochs={num_epochs}\
-          \ \\\n                            --effective_batch_size={effective_batch_size}\
+          \ /data\n                          name: input-data\n                  \
+          \        readOnly: true\n                        - mountPath: /output\n\
+          \                          name: output\n                      env:\n  \
+          \                      - name: NNODES\n                          value:\
+          \ \\\"{nnodes}\\\"\n                        - name: NPROC_PER_NODE\n   \
+          \                       value: \\\"{nproc_per_node}\\\"\n              \
+          \          - name: XDG_CACHE_HOME\n                          value: /tmp\n\
+          \                        - name: TRITON_CACHE_DIR\n                    \
+          \      value: /tmp\n                        - name: HF_HOME\n          \
+          \                value: /tmp\n                        - name: TRANSFORMERS_CACHE\n\
+          \                          value: /tmp\n                      resources:\n\
+          \                        requests:\n                          cpu: 8\n \
+          \                         \"nvidia.com/gpu\": {nproc_per_node}\n       \
+          \                 limits:\n                          cpu: 8\n          \
+          \                \"nvidia.com/gpu\": {nproc_per_node}\n                \
+          \  volumes:\n                    - name: input-data\n                  \
+          \    persistentVolumeClaim:\n                        claimName: {input_pvc_name}\n\
+          \                    - name: output\n                      persistentVolumeClaim:\n\
+          \                        claimName: {output_pvc_name}\n            Worker:\n\
+          \              replicas: {nnodes-1}\n              restartPolicy: OnFailure\n\
+          \              template:\n                metadata:\n                  annotations:\n\
+          \                    sidecar.istio.io/inject: 'false'\n                spec:\n\
+          \                  containers:\n                    - args:\n          \
+          \              - |\n                          echo \"Running phase {phase_num}\"\
+          \n                          echo \"Using {path_to_model} model for training\"\
+          \n                          echo \"Using {path_to_data} data for training\"\
+          \n                          mkdir -p /tmp/model;\n                     \
+          \     torchrun --nnodes {nnodes} \\\n                            --nproc_per_node\
+          \ {nproc_per_node} \\\n                            --node_rank \\$(RANK)\
+          \ \\\n                            --rdzv_endpoint \\$(MASTER_ADDR):\\$(MASTER_PORT)\
+          \ \\\n                            -m instructlab.training.main_ds \\\n \
+          \                           --model_name_or_path={path_to_model} \\\n  \
+          \                          --data_path={path_to_data} \\\n             \
+          \               --output_dir=/tmp/model \\\n                           \
+          \ --num_epochs={num_epochs} \\\n                            --effective_batch_size={effective_batch_size}\
           \ \\\n                            --learning_rate={learning_rate} \\\n \
           \                           --num_warmup_steps={num_warmup_steps} \\\n \
           \                           --save_samples={save_samples} \\\n         \
@@ -1038,19 +1080,15 @@ deploymentSpec:
           \                 - /bin/bash\n                        - '-c'\n        \
           \                - '--'\n                      image: {image}\n        \
           \              name: pytorch\n                      volumeMounts:\n    \
-          \                    - mountPath: /input_data\n                        \
-          \  name: input-data\n                          readOnly: true\n        \
-          \                - mountPath: /input_model\n                          name:\
-          \ model\n                          readOnly: true\n                    \
-          \    - mountPath: /output\n                          name: output\n    \
-          \                      readOnly: true\n                      env:\n    \
-          \                    - name: NNODES\n                          value: \\\
-          \"{nnodes}\\\"\n                        - name: NPROC_PER_NODE\n       \
-          \                   value: \\\"{nproc_per_node}\\\"\n                  \
-          \      - name: XDG_CACHE_HOME\n                          value: /tmp\n \
-          \                       - name: TRITON_CACHE_DIR\n                     \
-          \     value: /tmp\n                        - name: HF_HOME\n           \
-          \               value: /tmp\n                        - name: TRANSFORMERS_CACHE\n\
+          \                    - mountPath: /data\n                          name:\
+          \ input-data\n                          readOnly: true\n               \
+          \       env:\n                        - name: NNODES\n                 \
+          \         value: \\\"{nnodes}\\\"\n                        - name: NPROC_PER_NODE\n\
+          \                          value: \\\"{nproc_per_node}\\\"\n           \
+          \             - name: XDG_CACHE_HOME\n                          value: /tmp\n\
+          \                        - name: TRITON_CACHE_DIR\n                    \
+          \      value: /tmp\n                        - name: HF_HOME\n          \
+          \                value: /tmp\n                        - name: TRANSFORMERS_CACHE\n\
           \                          value: /tmp\n                      resources:\n\
           \                        requests:\n                          cpu: 8\n \
           \                         \"nvidia.com/gpu\": {nproc_per_node}\n       \
@@ -1058,14 +1096,10 @@ deploymentSpec:
           \                \"nvidia.com/gpu\": {nproc_per_node}\n                \
           \  volumes:\n                    - name: input-data\n                  \
           \    persistentVolumeClaim:\n                        claimName: {input_pvc_name}\n\
-          \                    - name: model\n                      persistentVolumeClaim:\n\
-          \                        claimName: {model_pvc_name}\n                 \
-          \   - name: output\n                      persistentVolumeClaim:\n     \
-          \                   claimName: {output_pvc_name}\n        \"\"\"\n    )\n\
-          \n    try:\n        manifest_yaml = yaml.safe_load(manifest)\n    except\
-          \ yaml.YAMLError as exc:\n        raise RuntimeError(f\"Error parsing manifest:\
-          \ {exc}\") from exc\n\n    # Discover the namespace in which the pod is\
-          \ running\n    with open(\n        \"/var/run/secrets/kubernetes.io/serviceaccount/namespace\"\
+          \n        \"\"\"\n    )\n\n    try:\n        manifest_yaml = yaml.safe_load(manifest)\n\
+          \    except yaml.YAMLError as exc:\n        raise RuntimeError(f\"Error\
+          \ parsing manifest: {exc}\") from exc\n\n    # Discover the namespace in\
+          \ which the pod is running\n    with open(\n        \"/var/run/secrets/kubernetes.io/serviceaccount/namespace\"\
           , \"r\", encoding=\"utf-8\"\n    ) as f:\n        namespace = f.read().strip()\n\
           \        print(f\"The pod is running in the namespace: {namespace}\")\n\n\
           \    try:\n        kubernetes.config.load_kube_config()\n        print(\"\
@@ -1601,6 +1635,60 @@ pipelineInfo:
 root:
   dag:
     tasks:
+      create-pvc-from-snapshot-op:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-create-pvc-from-snapshot-op
+        dependentTasks:
+        - create-volume-snapshot-op
+        - createpvc
+        inputs:
+          parameters:
+            access_modes:
+              runtimeValue:
+                constant:
+                - ReadOnlyMany
+            pipelinechannel--createpvc-name:
+              taskOutputParameter:
+                outputParameterKey: name
+                producerTask: createpvc
+            snapshot_name:
+              runtimeValue:
+                constant: '{{$.inputs.parameters[''pipelinechannel--createpvc-name'']}}-snap'
+            storage:
+              runtimeValue:
+                constant: 10Gi
+            volume_name:
+              runtimeValue:
+                constant: sdg-processed-data
+        taskInfo:
+          name: create-pvc-from-snapshot-op
+      create-volume-snapshot-op:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-create-volume-snapshot-op
+        dependentTasks:
+        - createpvc
+        - data-processing-op
+        inputs:
+          parameters:
+            pipelinechannel--createpvc-name:
+              taskOutputParameter:
+                outputParameterKey: name
+                producerTask: createpvc
+            snapshot_name:
+              runtimeValue:
+                constant: '{{$.inputs.parameters[''pipelinechannel--createpvc-name'']}}-snap'
+            volume_name:
+              taskOutputParameter:
+                outputParameterKey: name
+                producerTask: createpvc
+            volume_snapshot_class:
+              componentInputParameter: volume_snapshot_class_name
+        taskInfo:
+          name: create-volume-snapshot-op
       createpvc:
         cachingOptions:
           enableCache: true
@@ -1611,13 +1699,13 @@ root:
             access_modes:
               runtimeValue:
                 constant:
-                - ReadWriteMany
+                - ReadWriteOnce
             pvc_name_suffix:
               runtimeValue:
                 constant: -sdg
             size:
               runtimeValue:
-                constant: 10Gi
+                constant: 100Gi
             storage_class_name:
               componentInputParameter: k8s_storage_class_name
         taskInfo:
@@ -1632,28 +1720,7 @@ root:
             access_modes:
               runtimeValue:
                 constant:
-                - ReadWriteMany
-            pvc_name_suffix:
-              runtimeValue:
-                constant: -model-cache
-            size:
-              runtimeValue:
-                constant: 100Gi
-            storage_class_name:
-              componentInputParameter: k8s_storage_class_name
-        taskInfo:
-          name: createpvc-2
-      createpvc-3:
-        cachingOptions:
-          enableCache: true
-        componentRef:
-          name: comp-createpvc-3
-        inputs:
-          parameters:
-            access_modes:
-              runtimeValue:
-                constant:
-                - ReadWriteMany
+                - ReadWriteOnce
             pvc_name_suffix:
               runtimeValue:
                 constant: -output
@@ -1663,16 +1730,14 @@ root:
             storage_class_name:
               componentInputParameter: k8s_storage_class_name
         taskInfo:
-          name: createpvc-3
+          name: createpvc-2
       data-processing-op:
         cachingOptions: {}
         componentRef:
           name: comp-data-processing-op
         dependentTasks:
         - createpvc
-        - createpvc-2
         - model-to-pvc-op
-        - sdg-op
         inputs:
           parameters:
             max_batch_len:
@@ -1685,7 +1750,7 @@ root:
         componentRef:
           name: comp-deletepvc
         dependentTasks:
-        - createpvc-3
+        - createpvc-2
         - pvc-to-model-op
         - pvc-to-mt-bench-op
         - run-final-eval-op
@@ -1694,7 +1759,7 @@ root:
             pvc_name:
               taskOutputParameter:
                 outputParameterKey: name
-                producerTask: createpvc-3
+                producerTask: createpvc-2
         taskInfo:
           name: deletepvc
       deletepvc-2:
@@ -1719,14 +1784,14 @@ root:
         componentRef:
           name: comp-deletepvc-3
         dependentTasks:
-        - createpvc-2
-        - run-final-eval-op
+        - create-pvc-from-snapshot-op
+        - deletepvc-2
         inputs:
           parameters:
             pvc_name:
               taskOutputParameter:
-                outputParameterKey: name
-                producerTask: createpvc-2
+                outputParameterKey: Output
+                producerTask: create-pvc-from-snapshot-op
         taskInfo:
           name: deletepvc-3
       git-clone-op:
@@ -1750,6 +1815,8 @@ root:
           enableCache: true
         componentRef:
           name: comp-importer
+        dependentTasks:
+        - sdg-to-artifact-op
         inputs:
           parameters:
             uri:
@@ -1762,15 +1829,24 @@ root:
           name: comp-knowledge-processed-data-to-artifact-op
         dependentTasks:
         - createpvc
-        - data-processing-op
+        - skills-processed-data-to-artifact-op
         taskInfo:
           name: knowledge-processed-data-to-artifact-op
+      list-phase1-final-model-op:
+        cachingOptions: {}
+        componentRef:
+          name: comp-list-phase1-final-model-op
+        dependentTasks:
+        - createpvc-2
+        - pytorchjob-manifest-op
+        taskInfo:
+          name: list-phase1-final-model-op
       model-to-pvc-op:
         cachingOptions: {}
         componentRef:
           name: comp-model-to-pvc-op
         dependentTasks:
-        - createpvc-2
+        - createpvc
         - importer
         inputs:
           artifacts:
@@ -1785,7 +1861,7 @@ root:
         componentRef:
           name: comp-pvc-to-model-op
         dependentTasks:
-        - createpvc-3
+        - createpvc-2
         - run-mt-bench-op
         inputs:
           parameters:
@@ -1800,7 +1876,7 @@ root:
         componentRef:
           name: comp-pvc-to-mt-bench-op
         dependentTasks:
-        - createpvc-3
+        - createpvc-2
         - run-mt-bench-op
         inputs:
           parameters:
@@ -1814,31 +1890,20 @@ root:
         componentRef:
           name: comp-pytorchjob-manifest-op
         dependentTasks:
-        - createpvc
+        - create-pvc-from-snapshot-op
         - createpvc-2
-        - createpvc-3
-        - data-processing-op
-        - model-to-pvc-op
         inputs:
           parameters:
             effective_batch_size:
               componentInputParameter: train_effective_batch_size_phase_1
             input_pvc_name:
               taskOutputParameter:
-                outputParameterKey: name
-                producerTask: createpvc
+                outputParameterKey: Output
+                producerTask: create-pvc-from-snapshot-op
             learning_rate:
               componentInputParameter: train_learning_rate_phase_1
             max_batch_len:
               componentInputParameter: train_max_batch_len
-            model_pvc_name:
-              taskOutputParameter:
-                outputParameterKey: name
-                producerTask: createpvc-2
-            name_suffix:
-              taskOutputParameter:
-                outputParameterKey: name
-                producerTask: createpvc
             nnodes:
               componentInputParameter: train_nnodes
             nproc_per_node:
@@ -1850,7 +1915,7 @@ root:
             output_pvc_name:
               taskOutputParameter:
                 outputParameterKey: name
-                producerTask: createpvc-3
+                producerTask: createpvc-2
             phase_num:
               runtimeValue:
                 constant: 1.0
@@ -1865,30 +1930,21 @@ root:
         componentRef:
           name: comp-pytorchjob-manifest-op-2
         dependentTasks:
-        - createpvc
+        - create-pvc-from-snapshot-op
         - createpvc-2
-        - createpvc-3
-        - pytorchjob-manifest-op
+        - list-phase1-final-model-op
         inputs:
           parameters:
             effective_batch_size:
               componentInputParameter: train_effective_batch_size_phase_2
             input_pvc_name:
               taskOutputParameter:
-                outputParameterKey: name
-                producerTask: createpvc
+                outputParameterKey: Output
+                producerTask: create-pvc-from-snapshot-op
             learning_rate:
               componentInputParameter: train_learning_rate_phase_2
             max_batch_len:
               componentInputParameter: train_max_batch_len
-            model_pvc_name:
-              taskOutputParameter:
-                outputParameterKey: name
-                producerTask: createpvc-2
-            name_suffix:
-              taskOutputParameter:
-                outputParameterKey: name
-                producerTask: createpvc
             nnodes:
               componentInputParameter: train_nnodes
             nproc_per_node:
@@ -1900,7 +1956,11 @@ root:
             output_pvc_name:
               taskOutputParameter:
                 outputParameterKey: name
-                producerTask: createpvc-3
+                producerTask: createpvc-2
+            path_to_model:
+              taskOutputParameter:
+                outputParameterKey: Output
+                producerTask: list-phase1-final-model-op
             phase_num:
               runtimeValue:
                 constant: 2.0
@@ -1918,7 +1978,6 @@ root:
         dependentTasks:
         - createpvc
         - createpvc-2
-        - createpvc-3
         - run-mt-bench-op
         inputs:
           parameters:
@@ -1926,7 +1985,7 @@ root:
               componentInputParameter: sdg_repo_branch
             base_model_dir:
               runtimeValue:
-                constant: /model/
+                constant: /data/model/
             batch_size:
               componentInputParameter: final_eval_batch_size
             candidate_branch:
@@ -1947,7 +2006,7 @@ root:
         componentRef:
           name: comp-run-mt-bench-op
         dependentTasks:
-        - createpvc-3
+        - createpvc-2
         - pytorchjob-manifest-op-2
         inputs:
           parameters:
@@ -1988,8 +2047,7 @@ root:
           name: comp-sdg-to-artifact-op
         dependentTasks:
         - createpvc
-        - git-clone-op
-        - sdg-op
+        - taxonomy-to-artifact-op
         taskInfo:
           name: sdg-to-artifact-op
       skills-processed-data-to-artifact-op:
@@ -2008,7 +2066,6 @@ root:
           name: comp-taxonomy-to-artifact-op
         dependentTasks:
         - createpvc
-        - git-clone-op
         - sdg-op
         taskInfo:
           name: taxonomy-to-artifact-op
@@ -2042,7 +2099,7 @@ root:
         isOptional: true
         parameterType: BOOLEAN
       k8s_storage_class_name:
-        defaultValue: nfs-csi
+        defaultValue: ocs-external-storagecluster-ceph-rbd
         description: A Kubernetes StorageClass name for persistent volumes. Selected
           StorageClass must support RWX PersistentVolumes.
         isOptional: true
@@ -2183,6 +2240,12 @@ root:
         description: Training parameter. Random seed for initializing training.
         isOptional: true
         parameterType: NUMBER_INTEGER
+      volume_snapshot_class_name:
+        defaultValue: ocs-external-storagecluster-rbdplugin-snapclass
+        description: A Kubernetes VolumeSnapshotClass name for creating snapshots
+          of persistent volumes.
+        isOptional: true
+        parameterType: STRING
 schemaVersion: 2.1.0
 sdkVersion: kfp-2.9.0
 ---
@@ -2194,10 +2257,6 @@ platforms:
           imagePullSecret:
           - secretName: redhat-et-ilab-botty-pull-secret
           pvcMount:
-          - mountPath: /model
-            taskOutputParameter:
-              outputParameterKey: name
-              producerTask: createpvc-2
           - mountPath: /data
             taskOutputParameter:
               outputParameterKey: name
@@ -2214,30 +2273,30 @@ platforms:
             taskOutputParameter:
               outputParameterKey: name
               producerTask: createpvc
-        exec-model-to-pvc-op:
+        exec-list-phase1-final-model-op:
           pvcMount:
-          - mountPath: /model
+          - mountPath: /output
             taskOutputParameter:
               outputParameterKey: name
               producerTask: createpvc-2
+        exec-model-to-pvc-op:
+          pvcMount:
+          - mountPath: /data
+            taskOutputParameter:
+              outputParameterKey: name
+              producerTask: createpvc
         exec-pvc-to-model-op:
           pvcMount:
           - mountPath: /output
             taskOutputParameter:
               outputParameterKey: name
-              producerTask: createpvc-3
+              producerTask: createpvc-2
         exec-pvc-to-mt-bench-op:
           pvcMount:
           - mountPath: /output
             taskOutputParameter:
               outputParameterKey: name
-              producerTask: createpvc-3
-        exec-pytorchjob-manifest-op-2:
-          pvcMount:
-          - mountPath: /output
-            taskOutputParameter:
-              outputParameterKey: name
-              producerTask: createpvc-3
+              producerTask: createpvc-2
         exec-run-final-eval-op:
           configMapAsEnv:
           - configMapName: judge-server
@@ -2252,15 +2311,11 @@ platforms:
           - mountPath: /output
             taskOutputParameter:
               outputParameterKey: name
-              producerTask: createpvc-3
-          - mountPath: /input
+              producerTask: createpvc-2
+          - mountPath: /data
             taskOutputParameter:
               outputParameterKey: name
               producerTask: createpvc
-          - mountPath: /model
-            taskOutputParameter:
-              outputParameterKey: name
-              producerTask: createpvc-2
           secretAsEnv:
           - keyToEnv:
             - envVar: JUDGE_API_KEY
@@ -2280,7 +2335,7 @@ platforms:
           - mountPath: /output
             taskOutputParameter:
               outputParameterKey: name
-              producerTask: createpvc-3
+              producerTask: createpvc-2
           secretAsEnv:
           - keyToEnv:
             - envVar: JUDGE_API_KEY

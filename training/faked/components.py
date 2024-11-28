@@ -21,7 +21,7 @@ def pytorchjob_manifest_op(
 
 @dsl.component(base_image=PYTHON_IMAGE, install_kfp_package=False)
 def data_processing_op(
-    model_path: str = "/model",
+    model_path: str = "/data/model",
     sdg_path: str = "/data/sdg",
     skills_path: str = "/data/skills",
     knowledge_path: str = "/data/knowledge",
